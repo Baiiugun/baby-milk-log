@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="奶粉登记">
+  <meta name="theme-color" content="#FAF7F2">
+  <title>宝宝奶粉用量登记</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- 家庭口令验证遮罩（仅首次未带专属链接打开时出现） -->
+  <div id="authGate" class="auth-gate hidden" role="dialog" aria-modal="true">
+    <div class="auth-card">
+      <div class="auth-icon">🍼</div>
+      <h2>宝宝奶粉用量登记</h2>
+      <p class="auth-desc">请打开家人发给你的专属链接，或输入家庭口令：</p>
+      <form id="authForm" class="auth-form">
+        <input id="authInput" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="输入家庭口令" required>
+        <button type="submit" class="btn-primary">进入登记本</button>
+      </form>
+      <p id="authError" class="auth-error hidden"></p>
+    </div>
+  </div>
+
+  <div id="appShell" class="app-shell">
+    <!-- 顶部标题与状态 -->
+    <header class="topbar">
+      <div class="topbar-title">
+        <span class="logo">🍼</span>
+        <div>
+          <h1>奶粉用量登记</h1>
+          <p id="todayLabel" class="topbar-sub">加载中…</p>
+        </div>
+      </div>
+      <button id="btnRefresh" class="icon-btn" type="button" title="刷新云端记录" aria-label="刷新">↻</button>
+    </header>
+
+    <!-- 今日统计卡片 -->
+    <section class="stats-row" aria-label="今日统计">
+      <div class="stat-card stat-primary">
+        <div class="stat-label">今日总奶量</div>
+        <div class="stat-value"><span id="statTodayTotal">--</span><small> ml</small></div>
+        <div class="stat-sub" id="statTodayCount">共 0 次</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">距上次喂奶</div>
+        <div class="stat-value stat-value-sm" id="statSinceLast">--</div>
+        <div class="stat-sub" id="statLastDetail">暂无记录</div>
+      </div>
+    </section>
+
+    <!-- 快捷输入区（两种语音方式） -->
+    <section class="input-card" aria-label="记录喂奶">
+      <!-- 方式二：页面内直接点麦克风说话（豆包语音识别 2.0） -->
+      <div class="voice-zone">
+        <button id="btnMic" class="mic-btn" type="button" aria-pressed="false">
+          <span class="mic-ring" id="micRing"></span>
+          <span class="mic-icon" id="micIcon">🎙️</span>
+          <span class="mic-text-wrap">
+            <span class="mic-title" id="micTitle">点一下直接说话</span>
+            <span class="mic-sub" id="micSub">自动识别时间与毫升数，无需切换输入法</span>
+          </span>
+        </button>
+        <div id="micLiveBar" class="mic-live-bar hidden">
+          <div class="mic-meter-track">
+            <div id="micMeterFill" class="mic-meter-fill"></div>
+          </div>
+          <span id="micTimer" class="mic-timer">00:00</span>
+          <button id="btnMicCancel" class="btn-cancel-sm" type="button">取消</button>
+        </div>
+      </div>
+
+      <div class="divider"><span>或用手机自带语音转文字 / 打字</span></div>
+
+      <!-- 方式一：手机输入法语音转文字 / 文本输入 -->
+      <form id="textForm" class="text-zone">
+        <textarea
+          id="textInput"
+          rows="2"
+          placeholder="点这里用手机语音键说话或打字，例如：“130” 或 “上午十点半喝了150”"
+          maxlength="300"
+        ></textarea>
+        <div class="text-actions">
+          <button id="btnSubmitText" class="btn-primary btn-grow" type="submit">
+            ✨ 自动识别并记入表格
+          </button>
+          <button id="btnOpenManual" class="btn-secondary" type="button">
+            + 手动填
+          </button>
+        </div>
+      </form>
+    </section>
+
+    <!-- 即时反馈条（含一键撤销） -->
+    <div id="toast" class="toast hidden" role="status" aria-live="polite">
+      <div class="toast-body">
+        <div id="toastTitle" class="toast-title"></div>
+        <div id="toastDetail" class="toast-detail"></div>
+      </div>
+      <button id="btnUndo" class="btn-undo hidden" type="button">撤销</button>
+    </div>
+
+    <!-- 喂奶记录表格 -->
+    <section class="table-card" aria-label="喂奶记录表">
+      <div class="table-header">
+        <h2>喂奶记录表</h2>
+        <div class="filter-bar">
+          <select id="dateFilter" aria-label="按日期筛选">
+            <option value="all">全部最近</option>
+            <option value="today">仅看今天</option>
+            <option value="yesterday">仅看昨天</option>
+          </select>
+          <button id="btnExportCsv" class="btn-ghost" type="button" title="导出表格">导出</button>
+        </div>
+      </div>
+
+      <!-- 每日合计条 -->
+      <div id="dailySummaryBar" class="daily-summary-bar hidden"></div>
+
+      <div class="table-wrap">
+        <table class="milk-table">
+          <thead>
+            <tr>
+              <th class="col-date">日期</th>
+              <th class="col-time">喂奶时间</th>
+              <th class="col-amount">用量 (ml)</th>
+              <th class="col-actions">操作</th>
+            </tr>
+          </thead>
+          <tbody id="recordsTbody">
+            <tr>
+              <td colspan="4" class="empty-cell">正在同步云端记录…</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer class="footer-note">
+      数据实时保存在云端 · 全家手机打开即同步
+    </footer>
+  </div>
+
+  <!-- 手动补录 / 修改弹窗 -->
+  <div id="editModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h3 id="modalTitle">修改记录</h3>
+        <button id="btnCloseModal" class="icon-btn-sm" type="button" aria-label="关闭">✕</button>
+      </div>
+      <form id="editForm" class="modal-form">
+        <input type="hidden" id="editId">
+        <label class="field">
+          <span>日期</span>
+          <input id="editDate" type="date" required>
+        </label>
+        <label class="field">
+          <span>喂奶时间</span>
+          <input id="editTime" type="time" required>
+        </label>
+        <label class="field">
+          <span>用量（毫升 ml）</span>
+          <input id="editAmount" type="number" inputmode="numeric" min="1" max="2000" step="1" placeholder="例如 130" required>
+        </label>
+        <label class="field">
+          <span>备注（可选）</span>
+          <input id="editNote" type="text" maxlength="100" placeholder="如：吐奶一点、夜奶、母乳">
+        </label>
+        <p id="editRawPreview" class="raw-preview hidden"></p>
+        <div class="modal-actions">
+          <button id="btnCancelModal" class="btn-secondary" type="button">取消</button>
+          <button id="btnSaveModal" class="btn-primary btn-grow" type="submit">保存</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
