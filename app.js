@@ -1,17 +1,53 @@
 import { WavRecorder } from "./audio-recorder.js";
+import { buildDailyFromRecords, computeMilkStats } from "./stats.js";
 
 // 仅包含公开云函数地址与匿名公开密钥（不含任何 API Key 或管理密钥）
 const API_URL = "https://br-cute-tahr-8eff7472.supabase.aidap-global.cn-beijing.volces.com/functions/v1/milk-log-api";
 const PUBLIC_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1wbGF0Zm9ybSIsInJvbGUiOiJhbm9uIiwiZXhwIjozNjg2OTI1NzYzfQ.y45vSsbxFjV9k-psYujSR2YMtDOeZW_IDZS6eBlbRFc";
 const TOKEN_STORAGE_KEY = "baby_milk_family_token_v1";
 
+const ICON_STATS_SVG = `
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 20h16"/>
+    <rect x="6" y="12" width="3" height="8" rx="1"/>
+    <rect x="11" y="7" width="3" height="13" rx="1"/>
+    <rect x="16" y="4" width="3" height="16" rx="1"/>
+  </svg>
+`;
+
+const ICON_HOME_SVG = `
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/>
+    <rect x="9" y="3" width="6" height="4" rx="1"/>
+    <path d="M9 12h6"/>
+    <path d="M9 16h4"/>
+  </svg>
+`;
+
 const el = {
   authGate: document.getElementById("authGate"),
   authForm: document.getElementById("authForm"),
   authInput: document.getElementById("authInput"),
   authError: document.getElementById("authError"),
+  topbarBrand: document.getElementById("topbarBrand"),
   todayLabel: document.getElementById("todayLabel"),
+  btnTabStats: document.getElementById("btnTabStats"),
+  tabNavIcon: document.getElementById("tabNavIcon"),
+  tabNavLabel: document.getElementById("tabNavLabel"),
   btnRefresh: document.getElementById("btnRefresh"),
+  homeView: document.getElementById("homeView"),
+  statsView: document.getElementById("statsView"),
+  btnBackHome: document.getElementById("btnBackHome"),
+  btnScopeIncludeToday: document.getElementById("btnScopeIncludeToday"),
+  btnScopeExcludeToday: document.getElementById("btnScopeExcludeToday"),
+  statsNotice: document.getElementById("statsNotice"),
+  statsSummaryCards: document.getElementById("statsSummaryCards"),
+  weeklyCardSub: document.getElementById("weeklyCardSub"),
+  weeklyBarChart: document.getElementById("weeklyBarChart"),
+  weeklyPeriodsList: document.getElementById("weeklyPeriodsList"),
+  fiveDayCardSub: document.getElementById("fiveDayCardSub"),
+  fiveDayPeriodsList: document.getElementById("fiveDayPeriodsList"),
+  monthlyPeriodsList: document.getElementById("monthlyPeriodsList"),
   statTodayTotal: document.getElementById("statTodayTotal"),
   statTodayCount: document.getElementById("statTodayCount"),
   statSinceLast: document.getElementById("statSinceLast"),
@@ -52,6 +88,11 @@ const el = {
 
 let familyToken = "";
 let allRecords = [];
+let dailyStatsRows = [];
+let statsLoaded = false;
+let activeTab = "home";
+let excludeToday = false;
+let expandState = { weekly: false, fiveDay: false, monthly: false };
 let busy = false;
 let lastInsertedIds = [];
 let toastTimer = null;
@@ -100,6 +141,19 @@ function readTokenFromUrlOrStorage() {
   }
 }
 
+function readTabFromHash() {
+  const hash = window.location.hash || "";
+  const match = hash.match(/(?:^#|&)tab=([^&]+)/);
+  return match && decodeURIComponent(match[1]) === "stats" ? "stats" : "home";
+}
+
+function buildHash(token, tab) {
+  const parts = [];
+  if (token) parts.push(`k=${encodeURIComponent(token)}`);
+  if (tab === "stats") parts.push("tab=stats");
+  return parts.length ? `#${parts.join("&")}` : "";
+}
+
 function saveToken(token) {
   familyToken = token.trim();
   try {
@@ -108,9 +162,10 @@ function saveToken(token) {
     // ignore
   }
   // 保留 #k=... 在地址栏中，便于添加到手机主屏幕后依然自动免登录
-  if (familyToken && !window.location.hash.includes(`k=${encodeURIComponent(familyToken)}`)) {
+  const targetHash = buildHash(familyToken, activeTab);
+  if (familyToken && window.location.hash !== targetHash) {
     try {
-      window.history.replaceState(null, "", `#k=${encodeURIComponent(familyToken)}`);
+      window.history.replaceState(null, "", targetHash);
     } catch {
       // ignore
     }
@@ -313,11 +368,345 @@ function renderTable() {
     .join("");
 }
 
+function formatNumber(n) {
+  return Number(n || 0).toLocaleString("zh-CN");
+}
+
+function renderDeltaPill(deltaMl, prefix = "较上期") {
+  if (deltaMl === null || deltaMl === undefined) return "";
+  if (deltaMl > 0) {
+    return `<span class="delta-pill delta-up">${escapeHtml(prefix)} ↑ +${deltaMl}</span>`;
+  }
+  if (deltaMl < 0) {
+    return `<span class="delta-pill delta-down">${escapeHtml(prefix)} ↓ ${deltaMl}</span>`;
+  }
+  return `<span class="delta-pill delta-flat">${escapeHtml(prefix)} 持平</span>`;
+}
+
+function renderPeriodRows(items, {
+  container,
+  typeKey,
+  defaultLimit,
+  accentBar = false,
+  getName,
+  getTag,
+  getDaysText,
+  deltaPrefix = "较上期",
+}) {
+  if (!items.length || (items.length === 1 && items[0].recordedDays === 0)) {
+    container.innerHTML = `<div class="stats-empty">暂无足够记录，记入喂奶数据后自动生成统计</div>`;
+    return;
+  }
+
+  const expanded = Boolean(expandState[typeKey]);
+  const visible = expanded ? items : items.slice(0, defaultLimit);
+  const maxAvg = Math.max(
+    1,
+    ...items.map((item) => (item.dailyAvgMl !== null ? item.dailyAvgMl : 0))
+  );
+
+  const html = visible
+    .map((item, idx) => {
+      const tag = getTag(item, idx);
+      const hasVal = item.dailyAvgMl !== null;
+      const pct = hasVal ? Math.max(6, Math.round((item.dailyAvgMl / maxAvg) * 100)) : 0;
+      const valHtml = hasVal
+        ? `${formatNumber(item.dailyAvgMl)}<small>ml/天</small>`
+        : `--<small>ml/天</small>`;
+      const metaParts = hasVal
+        ? [
+            `总计 ${formatNumber(item.totalMl)} ml`,
+            getDaysText(item),
+            `日均 ${item.avgFeedsPerDay} 次`,
+            item.avgPerFeedMl !== null ? `次均 ${item.avgPerFeedMl} ml` : "",
+          ].filter(Boolean)
+        : [getDaysText(item), "暂无记录"];
+
+      return `
+        <div class="period-row${idx === 0 ? " highlight" : ""}">
+          <div class="period-head">
+            <div class="period-name">
+              <span>${escapeHtml(getName(item))}</span>
+              ${tag ? `<span class="period-tag">${escapeHtml(tag)}</span>` : ""}
+            </div>
+            <div class="period-val-wrap">
+              ${renderDeltaPill(item.deltaMl, deltaPrefix)}
+              <div class="period-val">${valHtml}</div>
+            </div>
+          </div>
+          <div class="period-bar-track">
+            <div class="period-bar-fill${accentBar ? " accent" : ""}" style="width:${pct}%"></div>
+          </div>
+          <div class="period-meta">${escapeHtml(metaParts.join(" · "))}</div>
+        </div>
+      `;
+    })
+    .join("");
+
+  const moreBtn =
+    items.length > defaultLimit
+      ? `<button class="btn-expand" type="button" data-expand-key="${typeKey}">${
+          expanded ? "收起部分历史" : `展开全部 ${items.length} 条记录`
+        }</button>`
+      : "";
+
+  container.innerHTML = html + moreBtn;
+}
+
+function renderWeeklyChart(thisWeekDays, weekAvgMl) {
+  const maxDayMl = Math.max(
+    1,
+    weekAvgMl || 0,
+    ...thisWeekDays.map((d) => d.totalMl || 0)
+  );
+  const maxBarPx = 92;
+
+  const avgLineHtml =
+    weekAvgMl !== null && weekAvgMl > 0
+      ? (() => {
+          const bottomPx = Math.max(6, Math.min(maxBarPx - 2, Math.round((weekAvgMl / maxDayMl) * maxBarPx)));
+          return `<div class="week-avg-line" style="bottom:${bottomPx}px"></div>`;
+        })()
+      : "";
+
+  const legendAvgHtml =
+    weekAvgMl !== null && weekAvgMl > 0
+      ? `<span class="legend-avg">周均 ${formatNumber(weekAvgMl)} ml/天</span>`
+      : `<span class="legend-avg">本周暂无均值</span>`;
+
+  const colsHtml = thisWeekDays
+    .map((day) => {
+      const hasMl = day.totalMl > 0;
+      const heightPx = hasMl ? Math.max(6, Math.round((day.totalMl / maxDayMl) * maxBarPx)) : 4;
+      const barClasses = ["week-bar-fill"];
+      if (!hasMl) barClasses.push("empty");
+      else if (day.isExcluded) barClasses.push("excluded");
+      else if (day.isToday) barClasses.push("today");
+
+      const valText = hasMl ? String(day.totalMl) : day.isFuture ? "" : "—";
+      return `
+        <div class="week-bar-col" title="${escapeHtml(`${day.date} ${day.weekdayLabel}：${day.totalMl} ml（${day.feedingCount}次）`)}">
+          <div class="week-bar-val${hasMl ? "" : " muted"}">${escapeHtml(valText)}</div>
+          <div class="week-bar-track">
+            <div class="${barClasses.join(" ")}" style="height:${heightPx}px"></div>
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+
+  const labelsHtml = thisWeekDays
+    .map((day) => {
+      const lbl = day.isToday ? "今天" : day.weekdayLabel;
+      return `
+        <div>
+          <div class="week-day-lbl${day.isToday ? " today" : ""}">${escapeHtml(lbl)}</div>
+          <div class="week-day-sub">${escapeHtml(day.shortDate)}</div>
+        </div>
+      `;
+    })
+    .join("");
+
+  el.weeklyBarChart.innerHTML = `
+    <div class="week-chart-legend">
+      <div class="legend-items">
+        <span class="legend-dot">日奶量</span>
+        <span class="legend-dot today">今天</span>
+      </div>
+      ${legendAvgHtml}
+    </div>
+    <div class="week-chart-plot">
+      ${avgLineHtml}
+      ${colsHtml}
+    </div>
+    <div class="week-chart-labels">
+      ${labelsHtml}
+    </div>
+  `;
+}
+
+function renderStatsView() {
+  if (!statsLoaded) {
+    el.statsSummaryCards.innerHTML = `<div class="stats-empty">正在加载云端统计数据…</div>`;
+    return;
+  }
+
+  const today = getLocalNow().date;
+  const stats = computeMilkStats(dailyStatsRows, { today, excludeToday });
+  const { thisWeek, latestFiveDay, thisMonth } = stats.summary;
+
+  el.btnScopeIncludeToday.classList.toggle("active", !excludeToday);
+  el.btnScopeExcludeToday.classList.toggle("active", excludeToday);
+
+  if (stats.onlyTodayExists) {
+    el.statsNotice.textContent = "目前只有今天的记录，已开启「不含今日」口径，可点右上角切回「含今日」查看当天均值。";
+    el.statsNotice.classList.remove("hidden");
+  } else {
+    el.statsNotice.classList.add("hidden");
+  }
+
+  const kpiCards = [
+    {
+      target: "sectionWeekly",
+      cls: "kpi-card kpi-card-primary",
+      title: "本周平均",
+      badge: "周一至周日",
+      range: thisWeek.rangeLabel,
+      avg: thisWeek.dailyAvgMl,
+      delta: thisWeek.deltaMl,
+      deltaPrefix: "较上周",
+      meta:
+        thisWeek.recordedDays > 0
+          ? `已记录 ${thisWeek.recordedDays} 天 · 总计 ${formatNumber(thisWeek.totalMl)} ml · 日均 ${thisWeek.avgFeedsPerDay} 次`
+          : "本周暂无记录",
+    },
+    {
+      target: "sectionFiveDay",
+      cls: "kpi-card kpi-card-accent",
+      title: "5 日标准平均",
+      badge: excludeToday ? "近 5 完整日" : "最近 5 日",
+      range: latestFiveDay.rangeLabel,
+      avg: latestFiveDay.dailyAvgMl,
+      delta: latestFiveDay.deltaMl,
+      deltaPrefix: "较前5日",
+      meta:
+        latestFiveDay.recordedDays > 0
+          ? `记录 ${latestFiveDay.recordedDays}/5 天 · 总计 ${formatNumber(latestFiveDay.totalMl)} ml · 日均 ${latestFiveDay.avgFeedsPerDay} 次`
+          : "最近 5 日暂无记录",
+    },
+    {
+      target: "sectionMonthly",
+      cls: "kpi-card",
+      title: "每月平均（本月）",
+      badge: thisMonth.monthLabel,
+      range: "按自然月",
+      avg: thisMonth.dailyAvgMl,
+      delta: thisMonth.deltaMl,
+      deltaPrefix: "较上月",
+      meta:
+        thisMonth.recordedDays > 0
+          ? `已记录 ${thisMonth.recordedDays} 天 · 总计 ${formatNumber(thisMonth.totalMl)} ml · 日均 ${thisMonth.avgFeedsPerDay} 次`
+          : "本月暂无记录",
+    },
+  ];
+
+  el.statsSummaryCards.innerHTML = kpiCards
+    .map((c) => {
+      const valHtml =
+        c.avg !== null ? `${formatNumber(c.avg)}<small>ml/天</small>` : `--<small>ml/天</small>`;
+      return `
+        <button class="${c.cls}" type="button" data-scroll-target="${c.target}">
+          <div class="kpi-top">
+            <div class="kpi-title-wrap">
+              <span class="kpi-title">${escapeHtml(c.title)}</span>
+              <span class="kpi-badge">${escapeHtml(c.badge)}</span>
+            </div>
+            <span class="kpi-range">${escapeHtml(c.range)}</span>
+          </div>
+          <div class="kpi-main">
+            <div class="kpi-value">${valHtml}</div>
+            ${renderDeltaPill(c.delta, c.deltaPrefix)}
+          </div>
+          <div class="kpi-meta">${escapeHtml(c.meta)}</div>
+        </button>
+      `;
+    })
+    .join("");
+
+  el.weeklyCardSub.textContent = excludeToday
+    ? `本周 ${thisWeek.rangeLabel} · 虚线为本周日均（不含今日）`
+    : `本周 ${thisWeek.rangeLabel} · 虚线为本周日均`;
+  renderWeeklyChart(stats.thisWeekDays, thisWeek.dailyAvgMl);
+
+  renderPeriodRows(stats.weeklyPeriods, {
+    container: el.weeklyPeriodsList,
+    typeKey: "weekly",
+    defaultLimit: 6,
+    accentBar: false,
+    getName: (w) => w.rangeLabel,
+    getTag: (w) => (w.isCurrentWeek ? "本周" : ""),
+    getDaysText: (w) => `记录 ${w.recordedDays} 天`,
+    deltaPrefix: "较上周",
+  });
+
+  el.fiveDayCardSub.textContent = excludeToday
+    ? "每连续 5 个自然日为一个周期（截至昨日），按有记录天数计算日均"
+    : "每连续 5 个自然日为一个周期（截至今日），按有记录天数计算日均";
+  renderPeriodRows(stats.fiveDayPeriods, {
+    container: el.fiveDayPeriodsList,
+    typeKey: "fiveDay",
+    defaultLimit: 6,
+    accentBar: true,
+    getName: (p) => p.rangeLabel,
+    getTag: (p) => (p.isLatest ? "近5日" : ""),
+    getDaysText: (p) => `记录 ${p.recordedDays}/${p.windowDays} 天`,
+    deltaPrefix: "较前5日",
+  });
+
+  renderPeriodRows(stats.monthlyPeriods, {
+    container: el.monthlyPeriodsList,
+    typeKey: "monthly",
+    defaultLimit: 12,
+    accentBar: false,
+    getName: (m) => m.monthLabel,
+    getTag: (m) => (m.isCurrentMonth ? "本月" : ""),
+    getDaysText: (m) => `记录 ${m.recordedDays} 天`,
+    deltaPrefix: "较上月",
+  });
+}
+
+function applyTabVisuals() {
+  const isStats = activeTab === "stats";
+  el.homeView.classList.toggle("hidden", isStats);
+  el.statsView.classList.toggle("hidden", !isStats);
+
+  el.btnTabStats.classList.toggle("active", isStats);
+  el.btnTabStats.setAttribute("aria-pressed", isStats ? "true" : "false");
+  el.btnTabStats.title = isStats ? "返回喂奶登记页" : "切换到奶量统计页面";
+  el.tabNavIcon.innerHTML = isStats ? ICON_HOME_SVG : ICON_STATS_SVG;
+  el.tabNavLabel.textContent = isStats ? "登记" : "统计";
+
+  if (isStats) {
+    renderStatsView();
+  }
+}
+
+function setActiveTab(nextTab, { pushHistory = true } = {}) {
+  const normalized = nextTab === "stats" ? "stats" : "home";
+  if (normalized === "stats" && recorder.recording) {
+    showToast("正在录音中", "请先结束或取消当前录音后再切换页面", { isError: true });
+    return;
+  }
+  const changed = activeTab !== normalized;
+  activeTab = normalized;
+  applyTabVisuals();
+
+  if (changed) {
+    window.scrollTo({ top: 0, behavior: "instant" });
+  }
+
+  const targetHash = buildHash(familyToken, activeTab);
+  if (window.location.hash !== targetHash) {
+    try {
+      if (pushHistory && changed) {
+        window.history.pushState(null, "", targetHash || "#");
+      } else {
+        window.history.replaceState(null, "", targetHash || "#");
+      }
+    } catch {
+      // ignore
+    }
+  }
+}
+
 function renderAll() {
   updateTopDateLabel();
   renderStats();
   renderDailySummary();
   renderTable();
+  if (activeTab === "stats") {
+    renderStatsView();
+  }
 }
 
 async function loadRecords({ silent = false } = {}) {
@@ -327,13 +716,25 @@ async function loadRecords({ silent = false } = {}) {
   }
   el.btnRefresh.classList.add("spinning");
   try {
-    const { data } = await apiCall({ action: "list", limit: 300 });
+    const [listRes, statsRes] = await Promise.all([
+      apiCall({ action: "list", limit: 300 }),
+      apiCall({ action: "daily_stats" }).catch(() => null),
+    ]);
+
+    const { data } = listRes;
     if (!data.ok) {
       if (!silent) showToast("读取失败", data.error || "请稍后重试", { isError: true });
       return;
     }
     hideAuthGate();
     allRecords = Array.isArray(data.records) ? data.records : [];
+
+    if (statsRes && statsRes.data && statsRes.data.ok && Array.isArray(statsRes.data.daily)) {
+      dailyStatsRows = statsRes.data.daily;
+    } else {
+      dailyStatsRows = buildDailyFromRecords(allRecords);
+    }
+    statsLoaded = true;
     renderAll();
   } catch (err) {
     if (!silent) showToast("网络异常", err.message || "无法连接云端", { isError: true });
@@ -617,6 +1018,58 @@ el.recordsTbody.addEventListener("click", async (e) => {
 el.dateFilter.addEventListener("change", renderTable);
 el.btnRefresh.addEventListener("click", () => loadRecords());
 
+el.btnTabStats.addEventListener("click", () => {
+  setActiveTab(activeTab === "stats" ? "home" : "stats", { pushHistory: true });
+});
+
+el.btnBackHome.addEventListener("click", () => {
+  setActiveTab("home", { pushHistory: true });
+});
+
+el.topbarBrand.addEventListener("click", () => {
+  if (activeTab !== "home") {
+    setActiveTab("home", { pushHistory: true });
+  }
+});
+
+el.topbarBrand.addEventListener("keydown", (e) => {
+  if ((e.key === "Enter" || e.key === " ") && activeTab !== "home") {
+    e.preventDefault();
+    setActiveTab("home", { pushHistory: true });
+  }
+});
+
+el.btnScopeIncludeToday.addEventListener("click", () => {
+  if (!excludeToday) return;
+  excludeToday = false;
+  renderStatsView();
+});
+
+el.btnScopeExcludeToday.addEventListener("click", () => {
+  if (excludeToday) return;
+  excludeToday = true;
+  renderStatsView();
+});
+
+el.statsSummaryCards.addEventListener("click", (e) => {
+  const card = e.target.closest("button[data-scroll-target]");
+  if (!card) return;
+  const target = document.getElementById(card.dataset.scrollTarget);
+  if (target) {
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+});
+
+el.statsView.addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-expand-key]");
+  if (!btn) return;
+  const key = btn.dataset.expandKey;
+  if (key && key in expandState) {
+    expandState[key] = !expandState[key];
+    renderStatsView();
+  }
+});
+
 el.btnExportCsv.addEventListener("click", () => {
   const rows = getFilteredRecords();
   if (!rows.length) {
@@ -647,14 +1100,22 @@ el.authForm.addEventListener("submit", async (e) => {
   await loadRecords();
 });
 
-// 监听链接变化（比如在已打开的标签页粘贴新的专属链接）
-window.addEventListener("hashchange", () => {
-  const next = readTokenFromUrlOrStorage();
-  if (next && next !== familyToken) {
-    saveToken(next);
+function syncFromUrl() {
+  const nextToken = readTokenFromUrlOrStorage();
+  const nextTab = readTabFromHash();
+  if (nextTab !== activeTab) {
+    activeTab = nextTab;
+    applyTabVisuals();
+  }
+  if (nextToken && nextToken !== familyToken) {
+    saveToken(nextToken);
     loadRecords();
   }
-});
+}
+
+// 监听链接变化与手机/浏览器返回键
+window.addEventListener("hashchange", syncFromUrl);
+window.addEventListener("popstate", syncFromUrl);
 
 // 每 60 秒自动刷新“距上次喂奶”的显示
 window.setInterval(() => {
@@ -663,6 +1124,8 @@ window.setInterval(() => {
 
 // 初始化
 updateTopDateLabel();
+activeTab = readTabFromHash();
+applyTabVisuals();
 familyToken = readTokenFromUrlOrStorage();
 if (familyToken) {
   saveToken(familyToken);

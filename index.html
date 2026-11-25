@@ -8,7 +8,7 @@
   <meta name="apple-mobile-web-app-title" content="奶粉登记">
   <meta name="theme-color" content="#FAF7F2">
   <title>宝宝奶粉用量登记</title>
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=2">
 </head>
 <body>
   <!-- 家庭口令验证遮罩（仅首次未带专属链接打开时出现） -->
@@ -28,71 +28,28 @@
   <div id="appShell" class="app-shell">
     <!-- 顶部标题与状态 -->
     <header class="topbar">
-      <div class="topbar-title">
+      <div class="topbar-title" id="topbarBrand" role="button" tabindex="0" aria-label="返回登记首页">
         <span class="logo">🍼</span>
         <div>
           <h1>奶粉用量登记</h1>
           <p id="todayLabel" class="topbar-sub">加载中…</p>
         </div>
       </div>
-      <button id="btnRefresh" class="icon-btn" type="button" title="刷新云端记录" aria-label="刷新">↻</button>
-    </header>
-
-    <!-- 今日统计卡片 -->
-    <section class="stats-row" aria-label="今日统计">
-      <div class="stat-card stat-primary">
-        <div class="stat-label">今日总奶量</div>
-        <div class="stat-value"><span id="statTodayTotal">--</span><small> ml</small></div>
-        <div class="stat-sub" id="statTodayCount">共 0 次</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">距上次喂奶</div>
-        <div class="stat-value stat-value-sm" id="statSinceLast">--</div>
-        <div class="stat-sub" id="statLastDetail">暂无记录</div>
-      </div>
-    </section>
-
-    <!-- 快捷输入区（两种语音方式） -->
-    <section class="input-card" aria-label="记录喂奶">
-      <!-- 方式二：页面内直接点麦克风说话（豆包语音识别 2.0） -->
-      <div class="voice-zone">
-        <button id="btnMic" class="mic-btn" type="button" aria-pressed="false">
-          <span class="mic-ring" id="micRing"></span>
-          <span class="mic-icon" id="micIcon">🎙️</span>
-          <span class="mic-text-wrap">
-            <span class="mic-title" id="micTitle">点一下直接说话</span>
-            <span class="mic-sub" id="micSub">自动识别时间与毫升数，无需切换输入法</span>
+      <div class="topbar-actions">
+        <button id="btnTabStats" class="tab-nav-btn" type="button" aria-pressed="false" title="切换到奶量统计页面">
+          <span class="tab-nav-icon" id="tabNavIcon" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 20h16"/>
+              <rect x="6" y="12" width="3" height="8" rx="1"/>
+              <rect x="11" y="7" width="3" height="13" rx="1"/>
+              <rect x="16" y="4" width="3" height="16" rx="1"/>
+            </svg>
           </span>
+          <span class="tab-nav-label" id="tabNavLabel">统计</span>
         </button>
-        <div id="micLiveBar" class="mic-live-bar hidden">
-          <div class="mic-meter-track">
-            <div id="micMeterFill" class="mic-meter-fill"></div>
-          </div>
-          <span id="micTimer" class="mic-timer">00:00</span>
-          <button id="btnMicCancel" class="btn-cancel-sm" type="button">取消</button>
-        </div>
+        <button id="btnRefresh" class="icon-btn" type="button" title="刷新云端记录" aria-label="刷新">↻</button>
       </div>
-
-      <div class="divider"><span>或用手机自带语音转文字 / 打字</span></div>
-
-      <!-- 方式一：手机输入法语音转文字 / 文本输入 -->
-      <form id="textForm" class="text-zone">
-        <textarea
-          id="textInput"
-          rows="2"
-          placeholder="点这里用手机语音键说话或打字，例如：“130” 或 “上午十点半喝了150”"
-          maxlength="300"
-        ></textarea>
-        <div class="text-actions">
-          <button id="btnSubmitText" class="btn-primary btn-grow" type="submit">
-            ✨ 自动识别并记入表格
-          </button>
-          <button id="btnOpenManual" class="btn-secondary" type="button">
-            + 手动填
-          </button>
-        </div>
-      </form>
-    </section>
+    </header>
 
     <!-- 即时反馈条（含一键撤销） -->
     <div id="toast" class="toast hidden" role="status" aria-live="polite">
@@ -103,41 +60,156 @@
       <button id="btnUndo" class="btn-undo hidden" type="button">撤销</button>
     </div>
 
-    <!-- 喂奶记录表格 -->
-    <section class="table-card" aria-label="喂奶记录表">
-      <div class="table-header">
-        <h2>喂奶记录表</h2>
-        <div class="filter-bar">
-          <select id="dateFilter" aria-label="按日期筛选">
-            <option value="all">全部最近</option>
-            <option value="today">仅看今天</option>
-            <option value="yesterday">仅看昨天</option>
-          </select>
-          <button id="btnExportCsv" class="btn-ghost" type="button" title="导出表格">导出</button>
+    <!-- 页面一：喂奶登记首页 -->
+    <main id="homeView" class="tab-view" role="tabpanel" aria-label="喂奶登记">
+      <!-- 今日统计卡片 -->
+      <section class="stats-row" aria-label="今日统计">
+        <div class="stat-card stat-primary">
+          <div class="stat-label">今日总奶量</div>
+          <div class="stat-value"><span id="statTodayTotal">--</span><small> ml</small></div>
+          <div class="stat-sub" id="statTodayCount">共 0 次</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">距上次喂奶</div>
+          <div class="stat-value stat-value-sm" id="statSinceLast">--</div>
+          <div class="stat-sub" id="statLastDetail">暂无记录</div>
+        </div>
+      </section>
+
+      <!-- 快捷输入区（两种语音方式） -->
+      <section class="input-card" aria-label="记录喂奶">
+        <!-- 方式二：页面内直接点麦克风说话（豆包语音识别 2.0） -->
+        <div class="voice-zone">
+          <button id="btnMic" class="mic-btn" type="button" aria-pressed="false">
+            <span class="mic-ring" id="micRing"></span>
+            <span class="mic-icon" id="micIcon">🎙️</span>
+            <span class="mic-text-wrap">
+              <span class="mic-title" id="micTitle">点一下直接说话</span>
+              <span class="mic-sub" id="micSub">自动识别时间与毫升数，无需切换输入法</span>
+            </span>
+          </button>
+          <div id="micLiveBar" class="mic-live-bar hidden">
+            <div class="mic-meter-track">
+              <div id="micMeterFill" class="mic-meter-fill"></div>
+            </div>
+            <span id="micTimer" class="mic-timer">00:00</span>
+            <button id="btnMicCancel" class="btn-cancel-sm" type="button">取消</button>
+          </div>
+        </div>
+
+        <div class="divider"><span>或用手机自带语音转文字 / 打字</span></div>
+
+        <!-- 方式一：手机输入法语音转文字 / 文本输入 -->
+        <form id="textForm" class="text-zone">
+          <textarea
+            id="textInput"
+            rows="2"
+            placeholder="点这里用手机语音键说话或打字，例如：“130” 或 “上午十点半喝了150”"
+            maxlength="300"
+          ></textarea>
+          <div class="text-actions">
+            <button id="btnSubmitText" class="btn-primary btn-grow" type="submit">
+              ✨ 自动识别并记入表格
+            </button>
+            <button id="btnOpenManual" class="btn-secondary" type="button">
+              + 手动填
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <!-- 喂奶记录表格 -->
+      <section class="table-card" aria-label="喂奶记录表">
+        <div class="table-header">
+          <h2>喂奶记录表</h2>
+          <div class="filter-bar">
+            <select id="dateFilter" aria-label="按日期筛选">
+              <option value="all">全部最近</option>
+              <option value="today">仅看今天</option>
+              <option value="yesterday">仅看昨天</option>
+            </select>
+            <button id="btnExportCsv" class="btn-ghost" type="button" title="导出表格">导出</button>
+          </div>
+        </div>
+
+        <!-- 每日合计条 -->
+        <div id="dailySummaryBar" class="daily-summary-bar hidden"></div>
+
+        <div class="table-wrap">
+          <table class="milk-table">
+            <thead>
+              <tr>
+                <th class="col-date">日期</th>
+                <th class="col-time">喂奶时间</th>
+                <th class="col-amount">用量 (ml)</th>
+                <th class="col-actions">操作</th>
+              </tr>
+            </thead>
+            <tbody id="recordsTbody">
+              <tr>
+                <td colspan="4" class="empty-cell">正在同步云端记录…</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <!-- 页面二：奶量统计页 -->
+    <main id="statsView" class="tab-view hidden" role="tabpanel" aria-label="奶量统计">
+      <div class="stats-page-bar">
+        <button id="btnBackHome" class="back-pill" type="button">← 返回登记</button>
+        <div class="scope-toggle" role="group" aria-label="统计口径切换">
+          <button id="btnScopeIncludeToday" class="scope-btn active" type="button" data-scope="include">含今日</button>
+          <button id="btnScopeExcludeToday" class="scope-btn" type="button" data-scope="exclude">不含今日</button>
         </div>
       </div>
 
-      <!-- 每日合计条 -->
-      <div id="dailySummaryBar" class="daily-summary-bar hidden"></div>
+      <div id="statsNotice" class="stats-notice hidden"></div>
 
-      <div class="table-wrap">
-        <table class="milk-table">
-          <thead>
-            <tr>
-              <th class="col-date">日期</th>
-              <th class="col-time">喂奶时间</th>
-              <th class="col-amount">用量 (ml)</th>
-              <th class="col-actions">操作</th>
-            </tr>
-          </thead>
-          <tbody id="recordsTbody">
-            <tr>
-              <td colspan="4" class="empty-cell">正在同步云端记录…</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
+      <!-- 核心均值概览：本周 / 5日标准 / 本月 -->
+      <section class="kpi-stack" id="statsSummaryCards" aria-label="日均奶量总览">
+        <div class="stats-empty">正在加载统计数据…</div>
+      </section>
+
+      <!-- 1. 本周每日柱状图与每周平均 -->
+      <section class="stats-card" id="sectionWeekly" aria-label="本周与每周平均统计">
+        <div class="stats-card-head">
+          <div>
+            <h2>本周日均与每日明细</h2>
+            <p class="stats-card-sub" id="weeklyCardSub">周一至周日 · 虚线为本周日均</p>
+          </div>
+        </div>
+        <div id="weeklyBarChart" class="week-chart-wrap"></div>
+        <div id="weeklyPeriodsList" class="period-list"></div>
+      </section>
+
+      <!-- 2. 以 5 日为标准的周期平均 -->
+      <section class="stats-card" id="sectionFiveDay" aria-label="每5日标准平均统计">
+        <div class="stats-card-head">
+          <div>
+            <h2>5 日标准周期平均</h2>
+            <p class="stats-card-sub" id="fiveDayCardSub">每连续 5 个自然日为一个周期，按有记录天数计算日均</p>
+          </div>
+        </div>
+        <div id="fiveDayPeriodsList" class="period-list"></div>
+      </section>
+
+      <!-- 3. 每月平均 -->
+      <section class="stats-card" id="sectionMonthly" aria-label="每月平均统计">
+        <div class="stats-card-head">
+          <div>
+            <h2>每月平均统计</h2>
+            <p class="stats-card-sub">按自然月汇总每日平均奶量与月度总计</p>
+          </div>
+        </div>
+        <div id="monthlyPeriodsList" class="period-list"></div>
+      </section>
+
+      <p class="stats-footnote">
+        口径说明：日均奶量 = 周期内总奶量 ÷ 该周期内有记录的天数；如当天尚未结束，可点上方「不含今日」仅统计已完整记录日。
+      </p>
+    </main>
 
     <footer class="footer-note">
       数据实时保存在云端 · 全家手机打开即同步
@@ -178,6 +250,6 @@
     </div>
   </div>
 
-  <script type="module" src="app.js"></script>
+  <script type="module" src="app.js?v=2"></script>
 </body>
 </html>
